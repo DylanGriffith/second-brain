@@ -1,0 +1,86 @@
+schema websites {
+    document websites {
+        field url type string {
+            indexing: summary | attribute
+            match: word
+        }
+
+        field title type string {
+            indexing: summary | index
+            index: enable-bm25
+        }
+
+        field domain type string {
+            indexing: summary | attribute
+            match: word
+        }
+
+        field content type string {
+            indexing: summary | index
+            index: enable-bm25
+        }
+    }
+
+    field embedding type tensor<float>(x[384]) {
+            indexing: input title | embed e5 |attribute | index
+            attribute {
+                distance-metric: angular
+            }
+            index {
+                hnsw {
+                    max-links-per-node: 32
+                    neighbors-to-explore-at-insert: 200
+                }
+            }
+    }
+
+    fieldset default {
+        fields: title
+    }
+
+    document-summary url {
+        summary url { }
+    }
+
+    rank-profile bm25 {
+        first-phase {
+            expression: bm25(title)
+        }
+    }
+
+    rank-profile closeness {
+        num-threads-per-search: 1
+        match-features: distance(field, embedding)
+
+        inputs {
+            query(q)  tensor<float>(x[384])
+            query(q1) tensor<float>(x[384])
+        }
+
+        first-phase {
+            expression: closeness(field, embedding)
+        }
+    }
+
+    rank-profile closeness-label inherits closeness {
+        match-features: closeness(label, q) closeness(label, q1)
+    }
+
+    rank-profile hybrid inherits closeness {
+        inputs {
+            query(wTitle) : 1.0
+            query(wVector) : 1.0
+        }
+        first-phase {
+            expression {
+                query(wTitle) * log(bm25(title)) +
+                query(wVector) * closeness(field, embedding)
+            }
+        }
+        match-features {
+            bm25(title)
+            closeness(field, embedding)
+            distance(field, embedding)
+        }
+    }
+}

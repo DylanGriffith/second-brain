@@ -1,0 +1,4 @@
+<query-profile id="default">
+    <field name="presentation.timing">true</field>
+    <field name="renderer.json.jsonWsets">true</field>
+</query-profile>
