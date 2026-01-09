@@ -6,8 +6,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import List, Optional, Set
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 
 from config import (
     LOG_LEVEL,
@@ -16,7 +17,7 @@ from config import (
     VESPA_URL,
 )
 from indexer import sync_all_sources
-from searcher import SearchRequest, SearchResponse, SearchResult, hybrid_search
+from searcher import SearchResult, hybrid_search
 from state import load_indexed_items, save_indexed_items
 
 # Configure logging
@@ -106,316 +107,48 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Configure templates
+templates = Jinja2Templates(directory="templates")
+
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
+async def index(request: Request):
     """Serve the search UI."""
-    html_content = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Second Brain Search</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background: #f5f5f5;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-            background: white;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-
-        h1 {
-            font-size: 2em;
-            margin-bottom: 10px;
-            color: #2c3e50;
-        }
-
-        .subtitle {
-            color: #7f8c8d;
-            margin-bottom: 30px;
-            font-size: 0.95em;
-        }
-
-        .search-form {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 30px;
-        }
-
-        .search-input {
-            flex: 1;
-            padding: 12px 16px;
-            font-size: 16px;
-            border: 2px solid #ddd;
-            border-radius: 4px;
-            outline: none;
-            transition: border-color 0.3s;
-        }
-
-        .search-input:focus {
-            border-color: #3498db;
-        }
-
-        .search-button {
-            padding: 12px 24px;
-            font-size: 16px;
-            background: #3498db;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-
-        .search-button:hover {
-            background: #2980b9;
-        }
-
-        .search-button:disabled {
-            background: #95a5a6;
-            cursor: not-allowed;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 40px;
-            color: #7f8c8d;
-        }
-
-        .error {
-            background: #e74c3c;
-            color: white;
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-        }
-
-        .results-header {
-            font-size: 0.9em;
-            color: #7f8c8d;
-            margin-bottom: 15px;
-        }
-
-        .result {
-            padding: 20px;
-            margin-bottom: 15px;
-            border: 1px solid #e0e0e0;
-            border-radius: 4px;
-            transition: box-shadow 0.3s;
-        }
-
-        .result:hover {
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }
-
-        .result-title {
-            font-size: 1.2em;
-            margin-bottom: 5px;
-        }
-
-        .result-title a {
-            color: #3498db;
-            text-decoration: none;
-        }
-
-        .result-title a:hover {
-            text-decoration: underline;
-        }
-
-        .result-url {
-            color: #27ae60;
-            font-size: 0.9em;
-            margin-bottom: 8px;
-            word-break: break-all;
-        }
-
-        .result-domain {
-            display: inline-block;
-            background: #ecf0f1;
-            padding: 2px 8px;
-            border-radius: 3px;
-            font-size: 0.85em;
-            color: #7f8c8d;
-            margin-bottom: 8px;
-        }
-
-        .result-snippet {
-            color: #555;
-            font-size: 0.95em;
-            margin-top: 8px;
-            line-height: 1.4;
-        }
-
-        .result-scores {
-            font-size: 0.85em;
-            color: #95a5a6;
-            margin-top: 8px;
-        }
-
-        .no-results {
-            text-align: center;
-            padding: 40px;
-            color: #7f8c8d;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>Second Brain Search</h1>
-        <p class="subtitle">Search your Chrome browsing history with hybrid search (BM25 + embeddings)</p>
-
-        <form class="search-form" id="searchForm">
-            <input
-                type="text"
-                class="search-input"
-                id="searchInput"
-                placeholder="Search your browsing history..."
-                autofocus
-                required
-            >
-            <button type="submit" class="search-button" id="searchButton">Search</button>
-        </form>
-
-        <div id="errorContainer"></div>
-        <div id="resultsContainer"></div>
-    </div>
-
-    <script>
-        const searchForm = document.getElementById('searchForm');
-        const searchInput = document.getElementById('searchInput');
-        const searchButton = document.getElementById('searchButton');
-        const resultsContainer = document.getElementById('resultsContainer');
-        const errorContainer = document.getElementById('errorContainer');
-
-        searchForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-
-            const query = searchInput.value.trim();
-            if (!query) return;
-
-            // Clear previous results and errors
-            resultsContainer.innerHTML = '<div class="loading">Searching...</div>';
-            errorContainer.innerHTML = '';
-            searchButton.disabled = true;
-
-            try {
-                const response = await fetch('/search', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ query, hits: 10 })
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Search failed: ${response.statusText}`);
-                }
-
-                const data = await response.json();
-                displayResults(data);
-
-            } catch (error) {
-                errorContainer.innerHTML = `<div class="error">Error: ${error.message}</div>`;
-                resultsContainer.innerHTML = '';
-            } finally {
-                searchButton.disabled = false;
-            }
-        });
-
-        function displayResults(data) {
-            const { results, query, count } = data;
-
-            if (results.length === 0) {
-                resultsContainer.innerHTML = `
-                    <div class="no-results">
-                        No results found for "${escapeHtml(query)}"
-                    </div>
-                `;
-                return;
-            }
-
-            let html = `<div class="results-header">Found ${count} result(s) for "${escapeHtml(query)}"</div>`;
-
-            results.forEach(result => {
-                const scores = [];
-                if (result.relevance) {
-                    scores.push(`Relevance: ${result.relevance.toFixed(3)}`);
-                }
-                if (result.bm25_score) {
-                    scores.push(`BM25: ${result.bm25_score.toFixed(2)}`);
-                }
-                if (result.embedding_score) {
-                    scores.push(`Embedding: ${result.embedding_score.toFixed(3)}`);
-                }
-
-                // Use URL if available, otherwise show global_id
-                const linkUrl = result.url || '#';
-                const showUrl = result.url || result.global_id;
-
-                html += `
-                    <div class="result">
-                        <div class="result-title">
-                            ${result.url ? `<a href="${escapeHtml(result.url)}" target="_blank" rel="noopener noreferrer">` : ''}
-                                ${escapeHtml(result.title)}
-                            ${result.url ? '</a>' : ''}
-                        </div>
-                        <div class="result-url">${escapeHtml(showUrl)}</div>
-                        <div class="result-domain">${escapeHtml(result.domain)}</div>
-                        ${result.snippet ? `<div class="result-snippet">${escapeHtml(result.snippet)}</div>` : ''}
-                        ${scores.length > 0 ? `<div class="result-scores">${scores.join(' • ')}</div>` : ''}
-                    </div>
-                `;
-            });
-
-            resultsContainer.innerHTML = html;
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-    </script>
-</body>
-</html>
-    """
-    return html_content
+    return templates.TemplateResponse("index.html.jinja", {"request": request})
 
 
-@app.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest):
-    """Execute a hybrid search query."""
-    if not request.query.strip():
-        raise HTTPException(status_code=400, detail="Query cannot be empty")
+@app.get("/search", response_class=HTMLResponse)
+async def search(request: Request, q: str = "", hits: int = 10):
+    """Execute a hybrid search query and render results."""
+    if not q or not q.strip():
+        return templates.TemplateResponse("index.html.jinja", {
+            "request": request,
+            "query": None,
+            "results": None,
+            "count": 0,
+            "error": None
+        })
 
     try:
-        results = await hybrid_search(VESPA_URL, request.query, request.hits)
+        results = await hybrid_search(VESPA_URL, q, hits)
+        search_results = [SearchResult(**r) for r in results]
 
-        return SearchResponse(
-            results=[SearchResult(**r) for r in results],
-            query=request.query,
-            count=len(results)
-        )
+        return templates.TemplateResponse("index.html.jinja", {
+            "request": request,
+            "query": q,
+            "results": search_results,
+            "count": len(search_results),
+            "error": None
+        })
     except Exception as e:
         logger.error(f"Search failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        return templates.TemplateResponse("index.html.jinja", {
+            "request": request,
+            "query": q,
+            "results": None,
+            "count": 0,
+            "error": str(e)
+        })
 
 
 @app.get("/status")

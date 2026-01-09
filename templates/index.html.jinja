@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Second Brain Search</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+            color: #2c3e50;
+        }
+
+        .subtitle {
+            color: #7f8c8d;
+            margin-bottom: 30px;
+            font-size: 0.95em;
+        }
+
+        .search-form {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+        }
+
+        .search-input {
+            flex: 1;
+            padding: 12px 16px;
+            font-size: 16px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .search-input:focus {
+            border-color: #3498db;
+        }
+
+        .search-button {
+            padding: 12px 24px;
+            font-size: 16px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .search-button:hover {
+            background: #2980b9;
+        }
+
+        .search-button:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+
+        .error {
+            background: #e74c3c;
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .results-header {
+            font-size: 0.9em;
+            color: #7f8c8d;
+            margin-bottom: 15px;
+        }
+
+        .result {
+            padding: 20px;
+            margin-bottom: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            transition: box-shadow 0.3s;
+        }
+
+        .result:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .result-title {
+            font-size: 1.2em;
+            margin-bottom: 5px;
+        }
+
+        .result-title a {
+            color: #3498db;
+            text-decoration: none;
+        }
+
+        .result-title a:hover {
+            text-decoration: underline;
+        }
+
+        .result-url {
+            color: #27ae60;
+            font-size: 0.9em;
+            margin-bottom: 8px;
+            word-break: break-all;
+        }
+
+        .result-domain {
+            display: inline-block;
+            background: #ecf0f1;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 0.85em;
+            color: #7f8c8d;
+            margin-bottom: 8px;
+        }
+
+        .result-snippet {
+            color: #555;
+            font-size: 0.95em;
+            margin-top: 8px;
+            line-height: 1.4;
+        }
+
+        .result-scores {
+            font-size: 0.85em;
+            color: #95a5a6;
+            margin-top: 8px;
+        }
+
+        .no-results {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Second Brain Search</h1>
+        <p class="subtitle">Search your Chrome browsing history with hybrid search (BM25 + embeddings)</p>
+
+        <form class="search-form" method="GET" action="/search">
+            <input
+                type="text"
+                class="search-input"
+                name="q"
+                placeholder="Search your browsing history..."
+                value="{{ query or '' }}"
+                autofocus
+                required
+            >
+            <button type="submit" class="search-button">Search</button>
+        </form>
+
+        {% if error %}
+        <div class="error">Error: {{ error }}</div>
+        {% endif %}
+
+        {% if query %}
+            {% if results %}
+                <div class="results-header">Found {{ count }} result(s) for "{{ query }}"</div>
+
+                {% for result in results %}
+                <div class="result">
+                    <div class="result-title">
+                        {% if result.url %}
+                            <a href="{{ result.url }}" target="_blank" rel="noopener noreferrer">{{ result.title }}</a>
+                        {% else %}
+                            {{ result.title }}
+                        {% endif %}
+                    </div>
+                    <div class="result-url">{{ result.url or result.global_id }}</div>
+                    <div class="result-domain">{{ result.domain }}</div>
+                    {% if result.snippet %}
+                        <div class="result-snippet">{{ result.snippet }}</div>
+                    {% endif %}
+                    {% if result.relevance or result.bm25_score or result.embedding_score %}
+                        <div class="result-scores">
+                            {% if result.relevance %}Relevance: {{ "%.3f"|format(result.relevance) }}{% endif %}
+                            {% if result.bm25_score %}{% if result.relevance %} • {% endif %}BM25: {{ "%.2f"|format(result.bm25_score) }}{% endif %}
+                            {% if result.embedding_score %}{% if result.relevance or result.bm25_score %} • {% endif %}Embedding: {{ "%.3f"|format(result.embedding_score) }}{% endif %}
+                        </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="no-results">
+                    No results found for "{{ query }}"
+                </div>
+            {% endif %}
+        {% endif %}
+    </div>
+</body>
+</html>
