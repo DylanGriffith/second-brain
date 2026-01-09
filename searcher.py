@@ -1,11 +1,34 @@
 """Vespa hybrid search module."""
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+# Pydantic models
+class SearchRequest(BaseModel):
+    query: str
+    hits: int = 10
+
+
+class SearchResult(BaseModel):
+    url: str
+    title: str
+    domain: str
+    content: str
+    relevance: float
+    bm25_score: Optional[float] = None
+    embedding_score: Optional[float] = None
+
+
+class SearchResponse(BaseModel):
+    results: List[SearchResult]
+    query: str
+    count: int
 
 
 async def hybrid_search(

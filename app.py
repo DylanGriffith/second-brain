@@ -8,7 +8,6 @@ from typing import List, Optional, Set
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
 
 from config import (
     CHROME_HISTORY_PATH,
@@ -18,7 +17,7 @@ from config import (
     VESPA_URL,
 )
 from indexer import sync_chrome_history
-from searcher import hybrid_search
+from searcher import SearchRequest, SearchResponse, SearchResult, hybrid_search
 from state import load_indexed_urls, save_indexed_urls
 
 # Configure logging
@@ -107,28 +106,6 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
-
-
-# Pydantic models
-class SearchRequest(BaseModel):
-    query: str
-    hits: int = 10
-
-
-class SearchResult(BaseModel):
-    url: str
-    title: str
-    domain: str
-    content: str
-    relevance: float
-    bm25_score: Optional[float] = None
-    embedding_score: Optional[float] = None
-
-
-class SearchResponse(BaseModel):
-    results: List[SearchResult]
-    query: str
-    count: int
 
 
 @app.get("/", response_class=HTMLResponse)
