@@ -10,15 +10,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
 from config import (
-    CHROME_HISTORY_PATH,
     LOG_LEVEL,
     STATE_FILE_PATH,
     SYNC_INTERVAL_SECONDS,
     VESPA_URL,
 )
-from indexer import sync_chrome_history
+from indexer import sync_all_sources
 from searcher import SearchRequest, SearchResponse, SearchResult, hybrid_search
-from state import load_indexed_urls, save_indexed_urls
+from state import load_indexed_items, save_indexed_items
 
 # Configure logging
 logging.basicConfig(
@@ -28,14 +27,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Global state
-indexed_urls: Set[str] = set()
+indexed_items: Set[str] = set()
 sync_lock = asyncio.Lock()
 last_sync_time: Optional[datetime] = None
 sync_error_count: int = 0
 
 
 async def perform_sync():
-    """Perform a Chrome history sync."""
+    """Perform a sync of all active data sources."""
     global last_sync_time, sync_error_count
 
     if sync_lock.locked():
@@ -44,26 +43,26 @@ async def perform_sync():
 
     async with sync_lock:
         try:
-            logger.info("Starting Chrome history sync...")
-            stats = await sync_chrome_history(
-                CHROME_HISTORY_PATH,
+            logger.info("Starting data source sync...")
+            stats = await sync_all_sources(
                 VESPA_URL,
-                indexed_urls,
+                indexed_items,
                 STATE_FILE_PATH
             )
             last_sync_time = datetime.now()
             sync_error_count = stats.get("errors", 0)
             logger.info(
-                f"Sync complete: {stats['new_urls']} new URLs indexed, "
-                f"{stats['errors']} errors"
+                f"Sync complete: {stats['new_items']} new items indexed, "
+                f"{stats['errors']} errors, "
+                f"{stats['sources_synced']} sources synced"
             )
         except Exception as e:
             logger.error(f"Sync failed: {e}", exc_info=True)
             sync_error_count += 1
 
 
-async def periodic_chrome_sync():
-    """Background task that periodically syncs Chrome history."""
+async def periodic_sync():
+    """Background task that periodically syncs all data sources."""
     # Initial sync on startup
     await perform_sync()
 
@@ -77,12 +76,12 @@ async def periodic_chrome_sync():
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     # Startup
-    global indexed_urls
-    indexed_urls = load_indexed_urls(STATE_FILE_PATH)
-    logger.info(f"Loaded {len(indexed_urls)} indexed URLs from state file")
+    global indexed_items
+    indexed_items = load_indexed_items(STATE_FILE_PATH)
+    logger.info(f"Loaded {len(indexed_items)} indexed items from state file")
 
     # Start background sync task
-    sync_task = asyncio.create_task(periodic_chrome_sync())
+    sync_task = asyncio.create_task(periodic_sync())
     logger.info(f"Background sync started (interval: {SYNC_INTERVAL_SECONDS}s)")
 
     yield
@@ -95,7 +94,7 @@ async def lifespan(app: FastAPI):
         logger.info("Background sync task cancelled")
 
     # Save state one last time
-    save_indexed_urls(indexed_urls, STATE_FILE_PATH)
+    save_indexed_items(indexed_items, STATE_FILE_PATH)
     logger.info("State saved on shutdown")
 
 
@@ -257,6 +256,13 @@ async def index():
             margin-bottom: 8px;
         }
 
+        .result-snippet {
+            color: #555;
+            font-size: 0.95em;
+            margin-top: 8px;
+            line-height: 1.4;
+        }
+
         .result-scores {
             font-size: 0.85em;
             color: #95a5a6;
@@ -359,15 +365,20 @@ async def index():
                     scores.push(`Embedding: ${result.embedding_score.toFixed(3)}`);
                 }
 
+                // Use URL if available, otherwise show global_id
+                const linkUrl = result.url || '#';
+                const showUrl = result.url || result.global_id;
+
                 html += `
                     <div class="result">
                         <div class="result-title">
-                            <a href="${escapeHtml(result.url)}" target="_blank" rel="noopener noreferrer">
-                                ${escapeHtml(result.title || result.url)}
-                            </a>
+                            ${result.url ? `<a href="${escapeHtml(result.url)}" target="_blank" rel="noopener noreferrer">` : ''}
+                                ${escapeHtml(result.title)}
+                            ${result.url ? '</a>' : ''}
                         </div>
-                        <div class="result-url">${escapeHtml(result.url)}</div>
+                        <div class="result-url">${escapeHtml(showUrl)}</div>
                         <div class="result-domain">${escapeHtml(result.domain)}</div>
+                        ${result.snippet ? `<div class="result-snippet">${escapeHtml(result.snippet)}</div>` : ''}
                         ${scores.length > 0 ? `<div class="result-scores">${scores.join(' • ')}</div>` : ''}
                     </div>
                 `;
@@ -411,7 +422,7 @@ async def search(request: SearchRequest):
 async def status():
     """Get sync status."""
     return {
-        "indexed_urls_count": len(indexed_urls),
+        "indexed_items_count": len(indexed_items),
         "last_sync_time": last_sync_time.isoformat() if last_sync_time else None,
         "sync_error_count": sync_error_count,
         "sync_in_progress": sync_lock.locked(),

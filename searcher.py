@@ -16,10 +16,13 @@ class SearchRequest(BaseModel):
 
 
 class SearchResult(BaseModel):
-    url: str
+    global_id: str
     title: str
     domain: str
-    content: str
+    snippet: str
+    last_seen: Optional[int] = None
+    url: Optional[str] = None
+    content: Optional[str] = None
     relevance: float
     bm25_score: Optional[float] = None
     embedding_score: Optional[float] = None
@@ -46,10 +49,13 @@ async def hybrid_search(
 
     Returns:
         List of result dictionaries with fields:
-        - url: Document URL
+        - global_id: Global identifier
         - title: Document title
         - domain: Document domain
-        - content: Document content
+        - snippet: Short snippet
+        - last_seen: Timestamp when last seen
+        - url: Document URL (optional, for websites)
+        - content: Full content (optional)
         - relevance: Overall relevance score
         - bm25_score: BM25 text matching score (optional)
         - embedding_score: Semantic similarity score (optional)
@@ -87,11 +93,22 @@ async def hybrid_search(
         relevance = hit.get("relevance", 0.0)
         match_features = hit.get("matchfeatures", {})
 
+        # Try to parse last_seen as int, fall back to None if not present or invalid
+        last_seen = None
+        if "last_seen" in fields:
+            try:
+                last_seen = int(fields["last_seen"])
+            except (ValueError, TypeError):
+                pass
+
         result = {
-            "url": fields.get("url", ""),
+            "global_id": fields.get("global_id", ""),
             "title": fields.get("title", ""),
             "domain": fields.get("domain", ""),
-            "content": fields.get("content", ""),
+            "snippet": fields.get("snippet", ""),
+            "last_seen": last_seen,
+            "url": fields.get("url"),
+            "content": fields.get("content"),
             "relevance": relevance,
             "bm25_score": match_features.get("bm25(title)"),
             "embedding_score": match_features.get("closeness(field, embedding)")

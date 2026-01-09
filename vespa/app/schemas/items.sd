@@ -1,5 +1,10 @@
-schema websites {
-    document websites {
+schema items {
+    document items {
+        field global_id type string {
+            indexing: summary | attribute
+            match: word
+        }
+
         field url type string {
             indexing: summary | attribute
             match: word
@@ -15,14 +20,23 @@ schema websites {
             match: word
         }
 
+        field snippet type string {
+            indexing: summary | index
+            index: enable-bm25
+        }
+
         field content type string {
             indexing: summary | index
             index: enable-bm25
         }
+
+        field last_seen type long {
+            indexing: summary | attribute
+        }
     }
 
     field embedding type tensor<float>(x[384]) {
-            indexing: input title | embed e5 |attribute | index
+            indexing: input title . " " . input snippet | embed e5 | attribute | index
             attribute {
                 distance-metric: angular
             }
@@ -35,16 +49,16 @@ schema websites {
     }
 
     fieldset default {
-        fields: title
+        fields: title, snippet
     }
 
-    document-summary url {
-        summary url { }
+    document-summary id_only {
+        summary global_id { }
     }
 
     rank-profile bm25 {
         first-phase {
-            expression: bm25(title)
+            expression: bm25(title) + bm25(snippet) + bm25(content)
         }
     }
 
@@ -68,17 +82,19 @@ schema websites {
 
     rank-profile hybrid inherits closeness {
         inputs {
-            query(wTitle) : 1.0
+            query(wText) : 1.0
             query(wVector) : 1.0
         }
         first-phase {
             expression {
-                query(wTitle) * log(bm25(title)) +
+                query(wText) * log(bm25(title) + bm25(snippet) + bm25(content)) +
                 query(wVector) * closeness(field, embedding)
             }
         }
         match-features {
             bm25(title)
+            bm25(snippet)
+            bm25(content)
             closeness(field, embedding)
             distance(field, embedding)
         }

@@ -15,7 +15,7 @@ This is a second-brain application that indexes and searches web content using V
 pip install requests
 
 # Start Vespa container
-docker run --detach --name vespa --hostname vespa-container \
+docker run --rm --detach --name vespa --hostname vespa-container \
   --publish 8080:8080 --publish 19071:19071 \
   vespaengine/vespa
 
@@ -51,14 +51,28 @@ The original scripts are kept in `scripts/` for reference:
 
 ### FastAPI Application
 
-The application is a FastAPI web server with automated Chrome history indexing:
+The application is a FastAPI web server with automated data source indexing:
 
 **Core Modules:**
 - **app.py**: Main FastAPI application with lifespan management, endpoints, and background sync orchestration
 - **config.py**: Configuration using environment variables (VESPA_URL, CHROME_HISTORY_PATH, SYNC_INTERVAL_SECONDS, STATE_FILE_PATH, LOG_LEVEL)
-- **indexer.py**: Chrome history loading and Vespa indexing logic (async with httpx)
+- **indexer.py**: Generic indexing logic that works with all data sources (async with httpx)
 - **searcher.py**: Hybrid search implementation (BM25 + embeddings)
-- **state.py**: Indexed URLs state persistence (JSON file at ~/.second-brain-indexed-urls.json)
+- **state.py**: Indexed items state persistence using composite keys (JSON file at .second-brain-indexed-urls.json)
+
+**Data Sources Architecture:**
+- **sources/base.py**: Abstract `DataSource` class defining the interface for all data sources
+- **sources/chrome_history.py**: Chrome browsing history implementation
+- **sources/__init__.py**: Data source registry where new sources are registered
+
+To add a new data source (e.g., bash history, psql history, neovim files):
+1. Create a new file in `sources/` (e.g., `bash_history.py`)
+2. Implement a class inheriting from `DataSource` with methods:
+   - `source_type` property (unique identifier like "bash_history")
+   - `display_name` property (human-readable name)
+   - `load_new_items(indexed_ids)` method (returns list of (item_id, document) tuples)
+   - `is_available()` method (check if source exists on system)
+3. Register it in `sources/__init__.py` in the `get_active_sources()` function
 
 **Endpoints:**
 - `GET /` - Web UI with search interface (inline HTML/CSS/JS)
@@ -76,32 +90,45 @@ The application is a FastAPI web server with automated Chrome history indexing:
 
 The Vespa backend is defined in `vespa/app/` with the following structure:
 
-- **schemas/websites.sd**: Document schema definition with fields (url, title, domain, content) and embedding field for semantic search
+- **schemas/items.sd**: Generic document schema for all item types with fields:
+  - `global_id` (required): Unique identifier (composite key: source_type:item_id)
+  - `title` (required): Display title for search results
+  - `domain` (required): Category/source indicator
+  - `snippet` (required): Short searchable snippet/description
+  - `last_seen` (required): Unix timestamp (milliseconds) when item was last seen
+  - `url` (optional): Web URL for clickable items
+  - `content` (optional): Full text content (for websites: full page content)
+  - `embedding`: 384-dimensional tensor for semantic search
 - **services.xml**: Defines the Vespa container with search API, document API, and the e5-small-v2-int8 embedder component
 - **search/query-profiles/default.xml**: Default query profile configuration
 - **model/**: Contains the embedding model files (tokenizer.json and e5-small-v2-int8.onnx)
 
 ### Search Ranking Profiles
 
-The websites schema defines multiple ranking profiles in `vespa/app/schemas/websites.sd`:
+The items schema defines multiple ranking profiles in `vespa/app/schemas/items.sd`:
 
-- **bm25**: Text-based ranking using BM25 on title field
+- **bm25**: Text-based ranking using BM25 across title, snippet, and content fields
 - **closeness**: Vector-based semantic search using HNSW index on embeddings
-- **hybrid**: Combines BM25 text search with vector similarity, weighted by query parameters `wTitle` and `wVector`
+- **hybrid**: Combines BM25 text search with vector similarity, weighted by query parameters `wText` and `wVector`
 
 ### Indexing Flow
 
-The FastAPI application automatically indexes Chrome history:
+The FastAPI application automatically indexes data from all active sources:
 
 1. Background task runs every 5 minutes (and once on startup)
-2. Chrome History SQLite database is copied to temp location (to avoid locking)
-3. New URLs are extracted using query: `SELECT url, title, last_visit_time FROM urls`
-4. Only URLs not in the indexed_urls set are processed (incremental)
-5. Documents are POSTed to Vespa at `/document/v1/docs/websites/docid/{doc_id}`
-6. URLs are encoded as document IDs using URL encoding (`quote(url, safe='')`)
-7. The e5 embedder automatically generates embeddings from the title field
-8. Documents are indexed with both text (BM25) and vector (HNSW) indices
-9. State is saved to ~/.second-brain-indexed-urls.json after each sync
+2. `indexer.sync_all_sources()` iterates through all active data sources from the registry
+3. For each source:
+   - Get already indexed item IDs using composite keys (format: `{source_type}:{item_id}`)
+   - Call source's `load_new_items(indexed_ids)` method
+   - For Chrome history: copies SQLite database to temp, queries new URLs
+   - For future sources: each implements its own loading logic
+4. Only items not in the indexed set are processed (incremental indexing)
+5. Each document gets its `global_id` field set to the composite key
+6. Documents are POSTed to Vespa at `/document/v1/docs/items/docid/{url_encoded_composite_key}`
+7. The e5 embedder automatically generates embeddings from the title + snippet fields
+8. Documents are indexed with both text (BM25 on title/snippet/content) and vector (HNSW) indices
+9. Composite keys are added to state (e.g., `"chrome_history:https://google.com"`)
+10. State is saved to .second-brain-indexed-urls.json after each sync
 
 ### Search API
 
@@ -136,7 +163,12 @@ curl -X POST -H "Content-Type: application/json" \
 ## Key Implementation Details
 
 - Vespa deployment changes require: `vespa deploy --wait 300 vespa/app`
-- Document IDs are URL-encoded versions of the actual URLs
+- Schema changed from `websites` to generic `items` schema
+- Document IDs are URL-encoded composite keys (format: `source_type:item_id`)
 - The embedding field uses a 384-dimensional tensor with angular distance metric
+- Embeddings generated from: `title + " " + snippet`
 - HNSW index configuration: max-links-per-node=32, neighbors-to-explore-at-insert=200
 - Browser history is read from Chrome's SQLite database at `~/Library/Application Support/Google/Chrome/Default/History`
+- Chrome timestamps are converted from microseconds since 1601 to unix milliseconds
+- All data sources must provide: global_id, title, domain, snippet, last_seen
+- Optional fields: url (for websites), content (for full text)
