@@ -9,11 +9,7 @@ import httpx
 
 from sources import get_active_sources
 from sources.base import Document
-from state import (
-    get_indexed_ids_for_source,
-    make_composite_key,
-    save_indexed_items,
-)
+from state import IndexedState, as_global_id
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +44,7 @@ async def index_document(
 
 async def sync_all_sources(
     vespa_url: str,
-    indexed_items: Set[str],
+    state: IndexedState,
     state_file: Path
 ) -> Dict[str, int]:
     """
@@ -56,7 +52,7 @@ async def sync_all_sources(
 
     Args:
         vespa_url: Base URL of Vespa API
-        indexed_items: Set of already indexed composite keys (will be modified in-place)
+        state: IndexedState object tracking already indexed items
         state_file: Path to state file for persistence
 
     Returns:
@@ -95,14 +91,8 @@ async def sync_all_sources(
         try:
             logger.info(f"Syncing {source.display_name}...")
 
-            # Get already indexed IDs for this source
-            indexed_ids = get_indexed_ids_for_source(
-                indexed_items,
-                source.source_type
-            )
-
             # Load new items from source
-            new_items = await source.load_new_items(indexed_ids)
+            new_items = await source.load_new_items(state)
             stats["items_processed"] += len(new_items)
 
             if not new_items:
@@ -114,24 +104,22 @@ async def sync_all_sources(
             # Index each item
             for item_id, doc_data in new_items:
                 try:
-                    # Set global_id (composite key)
-                    composite_key = make_composite_key(source.source_type, item_id)
-                    doc_data["global_id"] = composite_key
+                    global_id = as_global_id(source.source_type, item_id)
+                    doc_data["global_id"] = global_id
 
                     # Create Vespa document ID (URL-encoded composite key)
-                    vespa_doc_id = quote(composite_key, safe='')
+                    vespa_doc_id = quote(global_id, safe='')
 
                     # Index to Vespa
                     await index_document(vespa_url, vespa_doc_id, doc_data)
 
-                    # Add to indexed set
-                    indexed_items.add(composite_key)
+                    state.add(source.source_type, item_id)
 
                     stats["new_items"] += 1
 
                     # Periodically save state to avoid losing progress
                     if stats["new_items"] % 100 == 0:
-                        save_indexed_items(indexed_items, state_file)
+                        state.save(state_file)
                         logger.info(f"Progress: indexed {stats['new_items']} items")
 
                 except Exception as e:
@@ -146,7 +134,7 @@ async def sync_all_sources(
             stats["errors"] += 1
 
     # Final state save
-    save_indexed_items(indexed_items, state_file)
+    state.save(state_file)
 
     logger.info(
         f"Sync complete: {stats['new_items']} new items indexed, "

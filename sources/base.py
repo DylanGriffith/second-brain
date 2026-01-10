@@ -52,7 +52,7 @@ class DataSource(ABC):
     @abstractmethod
     async def load_new_items(
         self,
-        indexed_ids: Set[str]
+        state: IndexedState
     ) -> List[Tuple[str, Document]]:
         """
         Load items from this source that haven't been indexed yet.

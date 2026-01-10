@@ -43,13 +43,13 @@ class ChromeHistorySource(DataSource):
 
     async def load_new_items(
         self,
-        indexed_ids: Set[str]
+        state: IndexedState
     ) -> List[Tuple[str, Document]]:
         """
         Load URLs from Chrome history that haven't been indexed yet.
 
         Args:
-            indexed_ids: Set of already indexed URLs (without source prefix)
+            state: used to check already indexed items
 
         Returns:
             List of (url, document) tuples for new URLs
@@ -74,9 +74,9 @@ class ChromeHistorySource(DataSource):
 
                 for row in rows:
                     url, title, last_visit_time = row
+                    item_id = url
 
-                    # Skip if already indexed
-                    if url in indexed_ids:
+                    if state.is_indexed(self.source_type, item_id):
                         continue
 
                     # Extract domain from URL
@@ -103,7 +103,7 @@ class ChromeHistorySource(DataSource):
                         "last_seen": str(last_seen),
                     })
 
-                    documents.append((url, doc))
+                    documents.append((item_id, doc))
 
                 conn.close()
 

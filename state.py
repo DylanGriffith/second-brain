@@ -7,126 +7,53 @@ from typing import Dict, Set
 
 logger = logging.getLogger(__name__)
 
-
-def make_composite_key(source_type: str, item_id: str) -> str:
-    """
-    Create a composite key for tracking indexed items.
-
-    Args:
-        source_type: Type of data source (e.g., "chrome_history")
-        item_id: Unique identifier within the source (e.g., URL)
-
-    Returns:
-        Composite key in format "source_type:item_id"
-    """
+def as_global_id(source_type: str, item_id: str) -> str:
     return f"{source_type}:{item_id}"
 
+class IndexedState:
+    global_ids: set[str]
 
-def parse_composite_key(composite_key: str) -> tuple[str, str]:
-    """
-    Parse a composite key into source type and item ID.
+    def load(path: Path) -> IndexedState:
+        state = IndexedState()
+        state.global_ids = set()
 
-    Args:
-        composite_key: Key in format "source_type:item_id"
+        if not path.exists():
+            return state
 
-    Returns:
-        Tuple of (source_type, item_id)
-    """
-    parts = composite_key.split(":", 1)
-    if len(parts) == 2:
-        return parts[0], parts[1]
-    # Backwards compatibility: treat plain URLs as chrome_history
-    return "chrome_history", composite_key
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    state.global_ids = set(data)
 
+            return state
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Error loading state file: {e}")
+            return state
 
-def get_indexed_ids_for_source(
-    all_indexed: Set[str],
-    source_type: str
-) -> Set[str]:
-    """
-    Get all indexed item IDs for a specific source.
+    def add(self, source_type: str, item_id: str):
+        self.global_ids.add(as_global_id(source_type, item_id))
 
-    Args:
-        all_indexed: Set of all composite keys
-        source_type: Source type to filter by
+    def save(self, path: Path):
+        """
+        Persist indexed items to disk.
 
-    Returns:
-        Set of item IDs (without source prefix) for the given source
-    """
-    ids = set()
-    prefix = f"{source_type}:"
-    for key in all_indexed:
-        if key.startswith(prefix):
-            ids.add(key[len(prefix):])
-        elif ":" not in key:
-            # Backwards compatibility: plain URLs are chrome_history
-            if source_type == "chrome_history":
-                ids.add(key)
-    return ids
+        Args:
+            items: Set of composite key strings (format: "source_type:item_id")
+            path: Path to the JSON state file
+        """
+        try:
+            # Ensure parent directory exists
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(path, 'w') as f:
+                json.dump(sorted(list(self.global_ids)), f, indent=2)
+        except IOError as e:
+            logger.error(f"Failed to save indexed items state: {e}")
 
 
-def load_indexed_items(path: Path) -> Set[str]:
-    """
-    Load set of indexed items from disk.
+    def is_indexed(self, source_type: str, item_id: str) -> bool:
+        return as_global_id(source_type, item_id) in self.global_ids
 
-    Items are stored as composite keys in format "source_type:item_id"
-    (e.g., "chrome_history:https://google.com")
-
-    Args:
-        path: Path to the JSON state file
-
-    Returns:
-        Set of composite key strings
-    """
-    if not path.exists():
-        return set()
-
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                items = set(data)
-                # Migrate old format: plain URLs -> chrome_history:url
-                migrated = set()
-                needs_migration = False
-                for item in items:
-                    if ":" not in item:
-                        # Old format: plain URL
-                        migrated.add(make_composite_key("chrome_history", item))
-                        needs_migration = True
-                    else:
-                        migrated.add(item)
-
-                if needs_migration:
-                    logger.info("Migrated old state format to composite keys")
-                    save_indexed_items(migrated, path)
-
-                return migrated
-            return set()
-    except (json.JSONDecodeError, IOError) as e:
-        logger.warning(f"Error loading state file: {e}")
-        # If file is corrupted, start fresh
-        return set()
-
-
-def save_indexed_items(items: Set[str], path: Path) -> None:
-    """
-    Persist indexed items to disk.
-
-    Args:
-        items: Set of composite key strings (format: "source_type:item_id")
-        path: Path to the JSON state file
-    """
-    try:
-        # Ensure parent directory exists
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(path, 'w') as f:
-            json.dump(sorted(list(items)), f, indent=2)
-    except IOError as e:
-        logger.error(f"Failed to save indexed items state: {e}")
-
-
-# Backwards compatibility aliases
-load_indexed_urls = load_indexed_items
-save_indexed_urls = save_indexed_items
+    def total_size(self) -> int:
+        return len(self.global_ids)

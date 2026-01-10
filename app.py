@@ -18,7 +18,7 @@ from config import (
 )
 from indexer import sync_all_sources
 from searcher import SearchResult, hybrid_search
-from state import load_indexed_items, save_indexed_items
+from state import IndexedState
 
 # Configure logging
 logging.basicConfig(
@@ -28,7 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Global state
-indexed_items: Set[str] = set()
+state: IndexedState
 sync_lock = asyncio.Lock()
 last_sync_time: Optional[datetime] = None
 sync_error_count: int = 0
@@ -47,7 +47,7 @@ async def perform_sync():
             logger.info("Starting data source sync...")
             stats = await sync_all_sources(
                 VESPA_URL,
-                indexed_items,
+                state,
                 STATE_FILE_PATH
             )
             last_sync_time = datetime.now()
@@ -77,9 +77,9 @@ async def periodic_sync():
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     # Startup
-    global indexed_items
-    indexed_items = load_indexed_items(STATE_FILE_PATH)
-    logger.info(f"Loaded {len(indexed_items)} indexed items from state file")
+    global state
+    state = IndexedState.load(STATE_FILE_PATH)
+    logger.info(f"Loaded {state.total_size()} indexed items from state file")
 
     # Start background sync task
     sync_task = asyncio.create_task(periodic_sync())
@@ -95,7 +95,7 @@ async def lifespan(app: FastAPI):
         logger.info("Background sync task cancelled")
 
     # Save state one last time
-    save_indexed_items(indexed_items, STATE_FILE_PATH)
+    state.save(STATE_FILE_PATH)
     logger.info("State saved on shutdown")
 
 
@@ -166,7 +166,7 @@ async def search(request: Request, q: str = "", hits: int = 10):
 async def status():
     """Get sync status."""
     return {
-        "indexed_items_count": len(indexed_items),
+        "indexed_items_count": len(state.total_size()),
         "last_sync_time": last_sync_time.isoformat() if last_sync_time else None,
         "sync_error_count": sync_error_count,
         "sync_in_progress": sync_lock.locked(),
