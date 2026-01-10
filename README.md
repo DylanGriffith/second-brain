@@ -122,7 +122,7 @@ curl -X POST -H "Content-Type: application/json" \
 
 ## TODO
 
-1. [ ] Optimize performance of get_indexed_ids_for_source . We should not loop the entire list every time.
+1. [x] Optimize performance of get_indexed_ids_for_source . We should not loop the entire list every time.
 1. [x] Add last visited time to search results
 1. [ ] Use SQLite DB for state
 1. [x] Use templating library
