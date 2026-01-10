@@ -125,6 +125,6 @@ curl -X POST -H "Content-Type: application/json" \
 1. [ ] Optimize performance of get_indexed_ids_for_source . We should not loop the entire list every time.
 1. [ ] Add last visited time to search results
 1. [ ] Use SQLite DB for state
-1. [ ] Use templating library
+1. [x] Use templating library
 1. [ ] Add bash history index
 1. [ ] Sync bookmarks from instapaper

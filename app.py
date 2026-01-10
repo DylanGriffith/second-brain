@@ -131,7 +131,18 @@ async def search(request: Request, q: str = "", hits: int = 10):
 
     try:
         results = await hybrid_search(VESPA_URL, q, hits)
-        search_results = [SearchResult(**r) for r in results]
+        search_results = []
+
+        for r in results:
+            result = SearchResult(**r)
+            # Convert to dict and add formatted timestamp
+            result_dict = result.model_dump()
+            if result.last_seen:
+                dt = datetime.fromtimestamp(result.last_seen / 1000)
+                result_dict["last_seen_formatted"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                result_dict["last_seen_formatted"] = None
+            search_results.append(result_dict)
 
         return templates.TemplateResponse("index.html.jinja", {
             "request": request,

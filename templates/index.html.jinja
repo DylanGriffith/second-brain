@@ -143,6 +143,12 @@
             margin-bottom: 8px;
         }
 
+        .result-last-seen {
+            font-size: 0.85em;
+            color: #95a5a6;
+            margin-bottom: 8px;
+        }
+
         .result-snippet {
             color: #555;
             font-size: 0.95em;
@@ -200,6 +206,9 @@
                     </div>
                     <div class="result-url">{{ result.url or result.global_id }}</div>
                     <div class="result-domain">{{ result.domain }}</div>
+                    {% if result.last_seen %}
+                        <div class="result-last-seen">Last seen: {{ result.last_seen_formatted }}</div>
+                    {% endif %}
                     {% if result.snippet %}
                         <div class="result-snippet">{{ result.snippet }}</div>
                     {% endif %}
