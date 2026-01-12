@@ -4,9 +4,11 @@ import logging
 import shutil
 import sqlite3
 import tempfile
+import requests
 from pathlib import Path
 from typing import List, Set, Tuple
 from urllib.parse import urlparse
+from bs4 import BeautifulSoup
 
 from sources.base import DataSource, Document
 
@@ -91,15 +93,23 @@ class ChromeHistorySource(DataSource):
                     # Difference: 11644473600 seconds
                     chrome_epoch_offset = 11644473600
                     last_seen = int((last_visit_time / 1000000) - chrome_epoch_offset) * 1000
+                    text = ""
 
-                    # TODO: Load actual page content instead of empty string
+                    try:
+                        result = requests.get(url, timeout=5)
+                        soup = BeautifulSoup(result.content, 'html.parser')
+                        text = soup.get_text()
+                        logger.info(f"Fetched content for URL: {url} (length: {len(text)})")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch content for URL {url}: {e}")
+
                     doc: Document = Document({
                         "global_id": "",  # Will be set by indexer
                         "url": url,
                         "title": title or url,
                         "domain": domain,
                         "snippet": f"{title or url}",
-                        "content": "",  # TODO: Fetch full page content
+                        "content": text[:5000],
                         "last_seen": str(last_seen),
                     })
 
