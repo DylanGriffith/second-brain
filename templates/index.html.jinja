@@ -156,6 +156,36 @@
             line-height: 1.4;
         }
 
+        .collapsible {
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            margin-top: 8px;
+            font-weight: 500;
+            color: #3498db;
+        }
+
+        .collapsible::before {
+            content: "+ ";
+            margin-right: 5px;
+            transition: transform 0.2s;
+        }
+
+        .collapsible.active::before {
+            content: "- ";
+        }
+
+        .collapsible-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.2s ease-out;
+            padding: 0 10px;
+            margin-top: 5px;
+            font-size: 0.95em;
+            line-height: 1.4;
+            color: #555;
+        }
+
         .result-scores {
             font-size: 0.85em;
             color: #95a5a6;
@@ -168,6 +198,18 @@
             color: #7f8c8d;
         }
     </style>
+
+    <script>
+        function toggleCollapsible(element) {
+            const content = element.nextElementSibling;
+            element.classList.toggle("active");
+            if (content.style.maxHeight) {
+                content.style.maxHeight = null;
+            } else {
+                content.style.maxHeight = content.scrollHeight + "px";
+            }
+        }
+    </script>
 </head>
 <body>
     <div class="container">
@@ -211,6 +253,10 @@
                     {% endif %}
                     {% if result.snippet %}
                         <div class="result-snippet">{{ result.snippet }}</div>
+                    {% endif %}
+                    {% if result.content %}
+                        <div class="collapsible" onclick="toggleCollapsible(this)">Show Content</div>
+                        <div class="collapsible-content">{{ result.content }}</div>
                     {% endif %}
                     {% if result.relevance or result.bm25_score or result.embedding_score %}
                         <div class="result-scores">

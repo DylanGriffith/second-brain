@@ -5,6 +5,9 @@ import shutil
 import sqlite3
 import tempfile
 import requests
+
+import httpx
+
 from pathlib import Path
 from typing import List, Set, Tuple
 from urllib.parse import urlparse
@@ -96,10 +99,12 @@ class ChromeHistorySource(DataSource):
                     text = ""
 
                     try:
-                        result = requests.get(url, timeout=5)
-                        soup = BeautifulSoup(result.content, 'html.parser')
-                        text = soup.get_text()
-                        logger.info(f"Fetched content for URL: {url} (length: {len(text)})")
+                        async with httpx.AsyncClient() as client:
+                            response = await client.get(url, timeout=2.0)
+                            response.raise_for_status()
+                            soup = BeautifulSoup(response.text, 'html.parser')
+                            text = soup.get_text()
+                            logger.info(f"Fetched content for URL: {url} (length: {len(text)})")
                     except Exception as e:
                         logger.warning(f"Failed to fetch content for URL {url}: {e}")
 
