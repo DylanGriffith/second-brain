@@ -14,6 +14,13 @@ CHROME_HISTORY_PATH = Path(
     )
 )
 
+BASH_HISTORY_PATH = Path(
+    os.getenv(
+        "BASH_HISTORY_PATH",
+        str(Path.home() / ".bash_history")
+    )
+)
+
 # Background sync interval in seconds (default: 5 minutes)
 SYNC_INTERVAL_SECONDS = int(os.getenv("SYNC_INTERVAL_SECONDS", "300"))
 

@@ -10,34 +10,20 @@ To add a new data source:
 import logging
 from typing import List
 
-from config import CHROME_HISTORY_PATH
+from config import CHROME_HISTORY_PATH, BASH_HISTORY_PATH
 from sources.base import DataSource
 from sources.chrome_history import ChromeHistorySource
+from sources.bash_history import BashHistorySource
 
 logger = logging.getLogger(__name__)
 
 
 def get_active_sources() -> List[DataSource]:
-    """
-    Get list of active data sources.
-
-    This is where you register new sources. Example:
-
-        sources = [
-            ChromeHistorySource(CHROME_HISTORY_PATH),
-            BashHistorySource(BASH_HISTORY_PATH),
-            NeovimFilesSource(NEOVIM_FILES_PATH),
-        ]
-
-    Returns:
-        List of active DataSource instances
-    """
     sources = [
         ChromeHistorySource(CHROME_HISTORY_PATH),
-        # Add new sources here:
-        # BashHistorySource(config.BASH_HISTORY_PATH),
-        # PSQLHistorySource(config.PSQL_HISTORY_PATH),
-        # NeovimFilesSource(config.NEOVIM_FILES_PATH),
+         BashHistorySource(BASH_HISTORY_PATH),
+        # PSQLHistorySource(PSQL_HISTORY_PATH),
+        # NeovimFilesSource(NEOVIM_FILES_PATH),
     ]
 
     # Filter to only available sources
