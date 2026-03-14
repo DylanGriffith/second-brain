@@ -46,7 +46,13 @@ func (s *PsqlSource) CollectNew(srcState *state.SourceState) ([]client.Document,
 	}
 	lastSeen := info.ModTime().UnixMilli()
 
-	allLines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	// Normalize upfront: trim whitespace and drop empty lines (same as bash source).
+	var allLines []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			allLines = append(allLines, t)
+		}
+	}
 	startIdx := findResumePoint(allLines, srcState.LastLines)
 	newLines := allLines[startIdx:]
 
@@ -54,10 +60,6 @@ func (s *PsqlSource) CollectNew(srcState *state.SourceState) ([]client.Document,
 	var lastTen []string
 
 	for _, line := range newLines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
 		// Replace \n literals with actual newlines for multi-line SQL
 		fullSQL := strings.ReplaceAll(line, "\\n", "\n")
 		hash := sha256.Sum256([]byte(line))

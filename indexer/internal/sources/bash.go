@@ -46,7 +46,15 @@ func (s *BashSource) CollectNew(srcState *state.SourceState) ([]client.Document,
 	}
 	lastSeen := info.ModTime().UnixMilli()
 
-	allLines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	// Normalize upfront: trim whitespace and drop empty lines.
+	// This must match exactly how lines are stored in LastLines so that
+	// findResumePoint can do reliable consecutive matching.
+	var allLines []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			allLines = append(allLines, t)
+		}
+	}
 
 	startIdx := findResumePoint(allLines, srcState.LastLines)
 	newLines := allLines[startIdx:]
@@ -57,10 +65,6 @@ func (s *BashSource) CollectNew(srcState *state.SourceState) ([]client.Document,
 	var lastTen []string
 
 	for _, line := range newLines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
 		hash := sha256.Sum256([]byte(line))
 		globalID := fmt.Sprintf("bash_history:%x", hash[:8])
 		title := line
