@@ -1,0 +1,20 @@
+ls -la
+cd ~/workspace
+git status
+git log --oneline -10
+git diff HEAD~1
+make build
+make test
+docker ps
+docker compose up -d
+kubectl get pods
+kubectl logs -f deployment/api
+vim README.md
+grep -r "TODO" .
+find . -name "*.go" -type f
+go test ./...
+go build ./...
+curl -s http://localhost:8000/status | jq .
+ssh user@remote-host
+cat /etc/hosts
+history | grep docker

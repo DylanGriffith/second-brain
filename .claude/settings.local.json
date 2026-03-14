@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.local/share/mise/shims/go build:*)",
+      "Bash(~/.local/share/mise/shims/go test:*)",
+      "Read(//home/dylan/workspace/linux-dotfiles/nvim/lua/**)"
+    ]
+  }
+}

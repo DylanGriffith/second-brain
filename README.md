@@ -1,27 +1,37 @@
 # Second Brain - Personal Knowledge Search
 
-A FastAPI application that automatically indexes your personal data into Vespa and provides a web interface for hybrid search (BM25 + semantic embeddings).
+A personal knowledge base that indexes your local data and provides hybrid search (BM25 + semantic embeddings).
 
-## Features
+## Architecture
 
-- Extensible data source architecture for indexing different types of personal data
-- Currently indexes: Chrome browsing history
-- Easy to add new sources: bash history, psql history, neovim files, etc.
-- Automatic indexing every 5 minutes
-- Hybrid search combining keyword matching (BM25) and semantic search (embeddings)
-- Clean web UI for searching your personal knowledge
-- Incremental indexing (only new items are processed)
-- RESTful API for search queries
-
-## Setup
-
-### Install Python Dependencies
-
-```bash
-pip install -r requirements.txt
+```
+┌─────────────────────┐     POST /api/v1/documents     ┌──────────────────────┐
+│   Go Indexer (sb)   │ ──────────────────────────────> │  Python Server       │
+│                     │                                  │  (FastAPI + Vespa)   │
+│  Sources:           │                                  │                      │
+│  - Chrome history   │                                  │  - Hybrid search     │
+│  - Bash history     │                                  │  - Web UI            │
+│  - Psql history     │                                  │  - REST API          │
+│  - Neovim files     │                                  └──────────────────────┘
+│                     │                                           │
+│  Offline queue      │                                           ▼
+│  ~/.second-brain/   │                                    ┌────────────┐
+└─────────────────────┘                                    │   Vespa    │
+                                                           └────────────┘
 ```
 
-### Start Vespa Container
+The **Python server** (`server/`) handles storage and search. The **Go indexer** (`indexer/`) collects local data and sends it to the server. A **Neovim integration** tracks opened files.
+
+---
+
+## Python Server Setup
+
+### Prerequisites
+
+- [uv](https://astral.sh/uv) for Python package management
+- Docker for Vespa
+
+### Start Vespa
 
 ```bash
 docker run --rm --detach --name vespa --hostname vespa-container \
@@ -32,99 +42,145 @@ docker run --rm --detach --name vespa --hostname vespa-container \
 ### Deploy Vespa Application
 
 ```bash
-curl -L -o vespa/app/model/e5-small-v2-int8.onnx https://github.com/vespa-engine/sample-apps/raw/master/examples/model-exporting/model/e5-small-v2-int8.onnx
+curl -L -o server/vespa/app/model/e5-small-v2-int8.onnx \
+  https://github.com/vespa-engine/sample-apps/raw/master/examples/model-exporting/model/e5-small-v2-int8.onnx
+
 vespa config set target local
 vespa status deploy --wait 300
-vespa deploy --wait 300 vespa/app
+vespa deploy --wait 300 server/vespa/app
 ```
 
-### Start the FastAPI Application
+### Install Dependencies and Run
 
 ```bash
-uvicorn app:app --reload
+cd server
+uv sync
+uv run uvicorn second_brain.app:app --reload
 ```
 
-The application will:
-- Perform an initial sync of your Chrome history on startup
-- Continue syncing every 5 minutes in the background
-- Serve the web UI at http://localhost:8000
+Access the web UI at http://localhost:8000.
 
-## Usage
+### Server Configuration (environment variables with `SB_` prefix)
 
-### Web Interface
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SB_VESPA_URL` | `http://localhost:8080` | Vespa API URL |
+| `SB_DEFAULT_NAMESPACE` | `default` | Document namespace |
+| `SB_LOG_LEVEL` | `INFO` | Logging level |
 
-Open http://localhost:8000 in your browser to search your browsing history.
+### API Reference
 
-### API Endpoints
+**Index documents (used by Go indexer):**
+```bash
+curl -X POST http://localhost:8000/api/v1/documents \
+  -H "Content-Type: application/json" \
+  -d '{"documents": [{"global_id": "bash_history:abc123", "title": "git status", "domain": "hostname", "snippet": "git status", "last_seen": 1710000000000}]}'
+```
 
 **Search:**
 ```bash
-curl -X POST http://localhost:8000/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "your search query", "hits": 10}'
+curl "http://localhost:8000/api/v1/search?q=git+status&hits=10"
 ```
 
 **Status:**
 ```bash
-curl http://localhost:8000/status
+curl http://localhost:8000/api/v1/status
 ```
 
-## Adding New Data Sources
+### Running Tests
 
-To index additional types of personal data (bash history, psql history, neovim files, etc.):
-
-1. Create a new file in `sources/` (e.g., `bash_history.py`)
-2. Implement a class inheriting from `DataSource` (see `sources/base.py`)
-3. Implement required methods:
-   - `source_type` - Unique identifier (e.g., "bash_history")
-   - `display_name` - Human-readable name
-   - `load_new_items(indexed_ids)` - Load new items from source
-   - `is_available()` - Check if source exists on system
-4. Register the source in `sources/__init__.py` in `get_active_sources()`
-5. Map your data to the document format with required fields:
-   - `global_id` - Set to "" (will be auto-populated)
-   - `title` - Display title
-   - `domain` - Category/source indicator
-   - `snippet` - Short searchable snippet
-   - `last_seen` - Unix timestamp in milliseconds
-   - `url` - Optional, for web URLs
-   - `content` - Optional, for full text
-
-See `sources/chrome_history.py` for a complete example.
-
-## Configuration
-
-Configure via environment variables:
-
-- `VESPA_URL` - Vespa API URL (default: http://localhost:8080)
-- `CHROME_HISTORY_PATH` - Path to Chrome History database (default: ~/Library/Application Support/Google/Chrome/Default/History)
-- `SYNC_INTERVAL_SECONDS` - Background sync interval (default: 300 = 5 minutes)
-- `STATE_FILE_PATH` - Indexed items state file (default: .second-brain-indexed-urls.json)
-- `LOG_LEVEL` - Logging level (default: INFO)
-
-## Direct Vespa API Examples
-
-Text search only:
+Tests run against a real Vespa instance (uses a random namespace per session for isolation):
 
 ```bash
-curl -X POST -H "Content-Type: application/json" \
-  --data '{"yql": "select * from sources * where userQuery()", "hits": 3, "query": "Vespa"}' \
-  http://localhost:8080/search/
+cd server
+SB_VESPA_URL=http://vespa-01:8080 uv run pytest tests/ -v
 ```
 
-Hybrid search:
+---
+
+## Go Indexer Setup
+
+### Build
 
 ```bash
-curl -X POST -H "Content-Type: application/json" \
-  --data '{"yql": "select * from sources * where rank({targetHits:100}nearestNeighbor(embedding,q), userQuery())", "hits": 3, "query": "embedding", "type": "weakAnd", "ranking": "hybrid", "input.query(q)": "embed(e5, \"embedding\")"}' \
-  http://localhost:8080/search/
+cd indexer
+go build -o sb .
 ```
 
-## TODO
+### One-shot sync
 
-1. [x] Optimize performance of get_indexed_ids_for_source . We should not loop the entire list every time.
-1. [x] Add last visited time to search results
-1. [ ] Use SQLite DB for state
-1. [x] Use templating library
-1. [ ] Add bash history index
-1. [ ] Sync bookmarks from instapaper
+```bash
+./sb sync --server-url http://localhost:8000
+```
+
+### Run as daemon (syncs every 5 minutes)
+
+```bash
+./sb run --server-url http://localhost:8000
+```
+
+### Check status
+
+```bash
+./sb status
+```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--server-url` | `http://localhost:8000` | Python server URL |
+| `--state-dir` | `~/.second-brain/` | State and queue directory |
+| `--interval` | `5m` | Sync interval for daemon mode |
+
+### Data sources
+
+| Source | File | Notes |
+|--------|------|-------|
+| Bash history | `~/.bash_history` | Resumes from last 10 known lines |
+| Psql history | `~/.psql_history` | Resumes from last 10 known lines |
+| Chrome history | `~/.config/google-chrome/Default/History` (Linux) or `~/Library/Application Support/Google/Chrome/Default/History` (Mac) | Cursor-based resume |
+| Neovim files | `~/.second-brain/neovim-opened-files.log` | Written by Neovim integration |
+
+### Offline queue
+
+When the server is unavailable, documents are queued in `~/.second-brain/queue/`. On the next successful sync, queued documents are sent first.
+
+### Running Go tests
+
+```bash
+cd indexer
+go test ./internal/... -v
+```
+
+---
+
+## Neovim Integration
+
+Add to `~/.config/nvim/lua/initial.lua` (or equivalent):
+
+```lua
+-- Second Brain: track opened files
+vim.api.nvim_create_autocmd("BufRead", {
+  pattern = "*",
+  callback = function()
+    local filepath = vim.fn.expand("%:p")
+    if filepath == "" or vim.fn.filereadable(filepath) == 0 then
+      return
+    end
+    local dir = vim.fn.expand("~/.second-brain")
+    if vim.fn.isdirectory(dir) == 0 then
+      vim.fn.mkdir(dir, "p")
+    end
+    local logfile = dir .. "/neovim-opened-files.log"
+    local timestamp = os.date("%Y-%m-%dT%H:%M:%S")
+    local f = io.open(logfile, "a")
+    if f then
+      f:write(timestamp .. " " .. filepath .. "\n")
+      f:close()
+    end
+  end,
+})
+```
+
+After opening files in Neovim, run `./sb sync` to index them.
