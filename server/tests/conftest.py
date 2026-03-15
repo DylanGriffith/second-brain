@@ -1,4 +1,5 @@
 import io
+import os
 import time
 import uuid
 import zipfile
@@ -13,8 +14,8 @@ from second_brain.app import app
 from second_brain.config import Settings
 from second_brain.storage.vespa import VespaStorage
 
-VESPA_TEST_URL = "http://vespa-01:8080"
-VESPA_CONFIG_URL = "http://vespa-01:19071"
+VESPA_TEST_URL = os.getenv("VESPA_TEST_URL", "http://vespa-01:8080")
+VESPA_CONFIG_URL = os.getenv("VESPA_CONFIG_URL", "http://vespa-01:19071")
 APP_DIR = Path(__file__).parent.parent / "vespa" / "app"
 
 

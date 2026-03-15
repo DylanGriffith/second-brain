@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go-tests:
+    name: Go Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: indexer/go.mod
+          cache-dependency-path: indexer/go.sum
+
+      - name: Run Go tests
+        working-directory: indexer
+        run: go test ./...
+
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Start Vespa
+        run: |
+          docker run --rm --detach \
+            --name vespa \
+            --hostname vespa-01 \
+            --publish 127.0.0.1:8080:8080 \
+            --publish 127.0.0.1:19071:19071 \
+            vespaengine/vespa
+
+      - name: Wait for Vespa
+        run: |
+          for i in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8080/state/v1/health >/dev/null && \
+               curl --fail --silent http://127.0.0.1:19071/state/v1/health >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          docker logs vespa
+          exit 1
+
+      - name: Install server dependencies
+        working-directory: server
+        run: uv sync --frozen
+
+      - name: Run Python tests
+        working-directory: server
+        env:
+          VESPA_TEST_URL: http://127.0.0.1:8080
+          VESPA_CONFIG_URL: http://127.0.0.1:19071
+        run: uv run pytest tests/ -v
+
+      - name: Show Vespa logs on failure
+        if: failure()
+        run: docker logs vespa
+
+      - name: Stop Vespa
+        if: always()
+        run: docker stop vespa
+
+  docker-publish:
+    name: Publish Docker Image
+    runs-on: ubuntu-latest
+    needs:
+      - go-tests
+      - python-tests
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/second-brain-server
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
