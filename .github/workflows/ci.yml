@@ -55,11 +55,10 @@ jobs:
             --publish 127.0.0.1:19071:19071 \
             vespaengine/vespa
 
-      - name: Wait for Vespa
+      - name: Wait for Vespa config server
         run: |
           for i in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:8080/state/v1/health >/dev/null && \
-               curl --fail --silent http://127.0.0.1:19071/state/v1/health >/dev/null; then
+            if curl --fail --silent http://127.0.0.1:19071/state/v1/health >/dev/null; then
               exit 0
             fi
             sleep 5
