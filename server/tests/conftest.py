@@ -3,6 +3,7 @@ import os
 import time
 import uuid
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -33,17 +34,53 @@ def _build_deploy_zip() -> bytes:
     return buf.getvalue()
 
 
+def _wait_for_success(
+    operation: Callable[[], httpx.Response],
+    *,
+    ok_statuses: set[int],
+    timeout_seconds: float,
+    interval_seconds: float,
+    operation_name: str,
+) -> httpx.Response:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    last_status: int | None = None
+
+    while time.monotonic() < deadline:
+        try:
+            response = operation()
+            last_status = response.status_code
+            if response.status_code in ok_statuses:
+                return response
+        except httpx.HTTPError as exc:
+            last_error = exc
+        time.sleep(interval_seconds)
+
+    if last_error is not None:
+        raise RuntimeError(f"{operation_name} did not succeed within {timeout_seconds:.0f}s") from last_error
+    raise RuntimeError(
+        f"{operation_name} did not succeed within {timeout_seconds:.0f}s; last status was {last_status}"
+    )
+
+
 def deploy_vespa_app() -> None:
     """Deploy the Vespa application via the config server HTTP API and wait for convergence."""
     zip_bytes = _build_deploy_zip()
     with httpx.Client(timeout=120.0) as client:
-        resp = client.post(
-            f"{VESPA_CONFIG_URL}/application/v2/tenant/default/prepareandactivate",
-            content=zip_bytes,
-            headers={"Content-Type": "application/zip"},
+        deploy_timeout_seconds = float(os.getenv("VESPA_DEPLOY_TIMEOUT_SECONDS", "180"))
+        convergence_timeout_seconds = float(os.getenv("VESPA_CONVERGENCE_TIMEOUT_SECONDS", "180"))
+
+        _wait_for_success(
+            lambda: client.post(
+                f"{VESPA_CONFIG_URL}/application/v2/tenant/default/prepareandactivate",
+                content=zip_bytes,
+                headers={"Content-Type": "application/zip"},
+            ),
+            ok_statuses={200, 202},
+            timeout_seconds=deploy_timeout_seconds,
+            interval_seconds=2.0,
+            operation_name="Vespa application deploy",
         )
-        if resp.status_code not in (200, 202):
-            raise RuntimeError(f"Vespa deploy failed ({resp.status_code}): {resp.text[:500]}")
 
         # Wait for schema to be active by polling a sentinel document index.
         # The namespace field is new - once indexing succeeds, the schema is live.
@@ -58,19 +95,21 @@ def deploy_vespa_app() -> None:
                 "last_seen": 0,
             }
         }
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            r = client.post(
+
+        _wait_for_success(
+            lambda: client.post(
                 f"{VESPA_TEST_URL}/document/v1/_deploy_check/items/docid/{sentinel_id}",
                 json=sentinel_body,
                 timeout=10.0,
-            )
-            if r.status_code == 200:
-                # Clean up sentinel
-                client.delete(f"{VESPA_TEST_URL}/document/v1/_deploy_check/items/docid/{sentinel_id}")
-                return
-            time.sleep(2)
-        raise RuntimeError("Vespa schema did not become active within 120s")
+            ),
+            ok_statuses={200},
+            timeout_seconds=convergence_timeout_seconds,
+            interval_seconds=2.0,
+            operation_name="Vespa schema convergence",
+        )
+
+        # Clean up sentinel
+        client.delete(f"{VESPA_TEST_URL}/document/v1/_deploy_check/items/docid/{sentinel_id}")
 
 
 @pytest.fixture(scope="session", autouse=True)
