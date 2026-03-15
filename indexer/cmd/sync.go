@@ -42,10 +42,12 @@ func RunSync(cfg *config.Config) error {
 	activeSources := sources.GetActiveSources(cfg)
 
 	var allDocs []client.Document
+	pendingUpdates := make(map[string]*state.SourceState)
 
 	for _, src := range activeSources {
 		log.Printf("Collecting from %s...", src.Name())
-		srcState := st.GetSourceState(src.SourceType())
+		sourceType := src.SourceType()
+		srcState := cloneSourceState(st.GetSourceState(sourceType))
 		docs, err := src.CollectNew(srcState)
 		if err != nil {
 			log.Printf("Error collecting from %s: %v", src.Name(), err)
@@ -53,7 +55,11 @@ func RunSync(cfg *config.Config) error {
 		}
 		log.Printf("Collected %d new documents from %s", len(docs), src.Name())
 		allDocs = append(allDocs, docs...)
-		st.UpdateSourceState(src.SourceType(), srcState)
+		if len(docs) == 0 {
+			st.UpdateSourceState(sourceType, srcState)
+			continue
+		}
+		pendingUpdates[sourceType] = srcState
 	}
 
 	if len(allDocs) == 0 {
@@ -64,6 +70,8 @@ func RunSync(cfg *config.Config) error {
 		return nil
 	}
 
+	durable := false
+
 	// Drain queue first
 	if queued, err := q.LoadAll(); err == nil && len(queued) > 0 {
 		log.Printf("Sending %d queued documents...", len(queued))
@@ -72,6 +80,9 @@ func RunSync(cfg *config.Config) error {
 			// Queue new docs too since server is down
 			if qErr := q.Enqueue(allDocs); qErr != nil {
 				log.Printf("Error queuing new documents: %v", qErr)
+			} else {
+				durable = true
+				applySourceStateUpdates(st, pendingUpdates)
 			}
 			if err := state.Save(cfg.StateFile, st); err != nil {
 				log.Printf("Warning: could not save state: %v", err)
@@ -86,13 +97,36 @@ func RunSync(cfg *config.Config) error {
 		log.Printf("Server unavailable: %v, queuing %d documents", err, len(allDocs))
 		if qErr := q.Enqueue(allDocs); qErr != nil {
 			log.Printf("Error queuing documents: %v", qErr)
+		} else {
+			durable = true
 		}
 	} else {
 		log.Printf("Successfully indexed %d documents", len(allDocs))
+		durable = true
 	}
 
+	if durable {
+		applySourceStateUpdates(st, pendingUpdates)
+	}
 	if err := state.Save(cfg.StateFile, st); err != nil {
 		log.Printf("Warning: could not save state: %v", err)
 	}
 	return nil
+}
+
+func cloneSourceState(src *state.SourceState) *state.SourceState {
+	if src == nil {
+		return &state.SourceState{}
+	}
+	clone := *src
+	if src.LastLines != nil {
+		clone.LastLines = append([]string(nil), src.LastLines...)
+	}
+	return &clone
+}
+
+func applySourceStateUpdates(st *state.State, updates map[string]*state.SourceState) {
+	for sourceType, srcState := range updates {
+		st.UpdateSourceState(sourceType, srcState)
+	}
 }
