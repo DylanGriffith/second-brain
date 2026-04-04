@@ -66,6 +66,39 @@ func (q *Queue) ClearAll() {
 	}
 }
 
+// DrainFiles processes queue files one at a time, deleting each after process() succeeds.
+// If process() returns an error, draining stops and the remaining files are left intact.
+func (q *Queue) DrainFiles(process func([]client.Document) error) error {
+	entries, err := os.ReadDir(q.dir)
+	if err != nil {
+		return err
+	}
+	var files []string
+	for _, e := range entries {
+		if !e.IsDir() && len(e.Name()) > 6 && e.Name()[:6] == "queue-" {
+			files = append(files, e.Name())
+		}
+	}
+	sort.Strings(files)
+
+	for _, f := range files {
+		path := filepath.Join(q.dir, f)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var docs []client.Document
+		if err := json.Unmarshal(data, &docs); err != nil {
+			continue
+		}
+		if err := process(docs); err != nil {
+			return err
+		}
+		os.Remove(path)
+	}
+	return nil
+}
+
 func (q *Queue) Size() (int, error) {
 	docs, err := q.LoadAll()
 	return len(docs), err

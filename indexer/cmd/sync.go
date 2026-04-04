@@ -72,28 +72,27 @@ func RunSync(cfg *config.Config) error {
 
 	durable := false
 
-	// Drain queue first
-	if queued, err := q.LoadAll(); err == nil && len(queued) > 0 {
-		log.Printf("Sending %d queued documents...", len(queued))
-		if err := c.IndexDocuments(queued); err != nil {
-			log.Printf("Error sending queued documents: %v, re-queuing", err)
-			// Queue new docs too since server is down
-			if qErr := q.Enqueue(allDocs); qErr != nil {
-				log.Printf("Error queuing new documents: %v", qErr)
-			} else {
-				durable = true
-				applySourceStateUpdates(st, pendingUpdates)
-			}
-			if err := state.Save(cfg.StateFile, st); err != nil {
-				log.Printf("Warning: could not save state: %v", err)
-			}
-			return nil
+	// Drain queue first, file by file so progress survives restarts
+	queueErr := q.DrainFiles(func(docs []client.Document) error {
+		return indexInBatches(c, docs)
+	})
+	if queueErr != nil {
+		log.Printf("Error draining queue: %v, will retry on next sync", queueErr)
+		// Queue new docs since server appears down
+		if qErr := q.Enqueue(allDocs); qErr != nil {
+			log.Printf("Error queuing new documents: %v", qErr)
+		} else {
+			durable = true
+			applySourceStateUpdates(st, pendingUpdates)
 		}
-		q.ClearAll()
+		if err := state.Save(cfg.StateFile, st); err != nil {
+			log.Printf("Warning: could not save state: %v", err)
+		}
+		return nil
 	}
 
 	// Send new docs
-	if err := c.IndexDocuments(allDocs); err != nil {
+	if err := indexInBatches(c, allDocs); err != nil {
 		log.Printf("Server unavailable: %v, queuing %d documents", err, len(allDocs))
 		if qErr := q.Enqueue(allDocs); qErr != nil {
 			log.Printf("Error queuing documents: %v", qErr)
@@ -110,6 +109,30 @@ func RunSync(cfg *config.Config) error {
 	}
 	if err := state.Save(cfg.StateFile, st); err != nil {
 		log.Printf("Warning: could not save state: %v", err)
+	}
+	return nil
+}
+
+const batchSize = 100
+const maxContentBytes = 100_000
+
+func indexInBatches(c *client.Client, docs []client.Document) error {
+	for i := 0; i < len(docs); i += batchSize {
+		end := i + batchSize
+		if end > len(docs) {
+			end = len(docs)
+		}
+		batch := make([]client.Document, end-i)
+		for j, doc := range docs[i:end] {
+			if len(doc.Content) > maxContentBytes {
+				doc.Content = doc.Content[:maxContentBytes]
+			}
+			batch[j] = doc
+		}
+		log.Printf("Sending batch %d-%d of %d documents...", i+1, end, len(docs))
+		if err := c.IndexDocuments(batch); err != nil {
+			return err
+		}
 	}
 	return nil
 }

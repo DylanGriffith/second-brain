@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 )
@@ -67,7 +68,7 @@ func (c *Client) IndexDocuments(docs []Document) error {
 		return fmt.Errorf("decode error: %w", err)
 	}
 	if result.Errors > 0 {
-		return fmt.Errorf("server reported %d errors indexing documents", result.Errors)
+		log.Printf("Warning: server reported %d/%d errors indexing documents (skipping)", result.Errors, len(docs))
 	}
 	return nil
 }

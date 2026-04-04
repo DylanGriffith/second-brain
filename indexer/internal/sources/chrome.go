@@ -87,6 +87,11 @@ func (s *ChromeSource) CollectNew(srcState *state.SourceState) ([]client.Documen
 	defer db.Close()
 
 	cursor, _ := strconv.ParseInt(srcState.Cursor, 10, 64)
+	const chromeEpochOffset = 11644473600
+	oneMonthAgo := (time.Now().AddDate(0, -1, 0).Unix() + chromeEpochOffset) * 1000000
+	if oneMonthAgo > cursor {
+		cursor = oneMonthAgo
+	}
 	rows, err := db.Query(
 		"SELECT url, title, last_visit_time FROM urls WHERE last_visit_time > ? ORDER BY last_visit_time ASC",
 		cursor,
@@ -96,9 +101,25 @@ func (s *ChromeSource) CollectNew(srcState *state.SourceState) ([]client.Documen
 	}
 	defer rows.Close()
 
+	// Count total rows for progress reporting
+	var totalRows int
+	countRows, err := db.Query(
+		"SELECT COUNT(*) FROM urls WHERE last_visit_time > ?",
+		cursor,
+	)
+	if err == nil {
+		if countRows.Next() {
+			_ = countRows.Scan(&totalRows)
+		}
+		countRows.Close()
+	}
+	if totalRows > 0 {
+		log.Printf("Chrome: fetching content for %d new URLs...", totalRows)
+	}
+
 	var docs []client.Document
 	var maxCursor int64
-	const chromeEpochOffset = 11644473600
+	processed := 0
 
 	for rows.Next() {
 		var rawURL, title string
@@ -114,6 +135,11 @@ func (s *ChromeSource) CollectNew(srcState *state.SourceState) ([]client.Documen
 		domain := extractDomain(rawURL)
 		if title == "" {
 			title = rawURL
+		}
+
+		processed++
+		if totalRows > 0 && (processed%10 == 0 || processed == totalRows) {
+			log.Printf("Chrome: fetching content %d/%d (%s)", processed, totalRows, domain)
 		}
 
 		content := s.fetchContent(rawURL)

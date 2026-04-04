@@ -25,7 +25,7 @@ func New(serverURL, stateDir string) (*Config, error) {
 		return nil, err
 	}
 	return &Config{
-		ServerURL: serverURL,
+		ServerURL: strings.TrimRight(serverURL, "/"),
 		StateDir:  expanded,
 		StateFile: filepath.Join(expanded, "state.json"),
 		QueueDir:  queueDir,
