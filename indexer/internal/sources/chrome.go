@@ -5,38 +5,32 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/DylanGriffith/second-brain/indexer/internal/client"
 	"github.com/DylanGriffith/second-brain/indexer/internal/config"
 	"github.com/DylanGriffith/second-brain/indexer/internal/state"
 	_ "github.com/mattn/go-sqlite3"
-	"golang.org/x/net/html"
 )
 
 type ChromeSource struct {
 	historyPath string
-	httpClient  *http.Client
 }
 
 func NewChromeSource(cfg *config.Config) *ChromeSource {
 	return &ChromeSource{
 		historyPath: defaultChromeHistoryPath(),
-		httpClient:  &http.Client{Timeout: 3 * time.Second},
 	}
 }
 
 func NewChromeSourceWithPath(path string) *ChromeSource {
 	return &ChromeSource{
 		historyPath: path,
-		httpClient:  &http.Client{Timeout: 3 * time.Second},
 	}
 }
 
@@ -101,25 +95,8 @@ func (s *ChromeSource) CollectNew(srcState *state.SourceState) ([]client.Documen
 	}
 	defer rows.Close()
 
-	// Count total rows for progress reporting
-	var totalRows int
-	countRows, err := db.Query(
-		"SELECT COUNT(*) FROM urls WHERE last_visit_time > ?",
-		cursor,
-	)
-	if err == nil {
-		if countRows.Next() {
-			_ = countRows.Scan(&totalRows)
-		}
-		countRows.Close()
-	}
-	if totalRows > 0 {
-		log.Printf("Chrome: fetching content for %d new URLs...", totalRows)
-	}
-
 	var docs []client.Document
 	var maxCursor int64
-	processed := 0
 
 	for rows.Next() {
 		var rawURL, title string
@@ -137,13 +114,6 @@ func (s *ChromeSource) CollectNew(srcState *state.SourceState) ([]client.Documen
 			title = rawURL
 		}
 
-		processed++
-		if totalRows > 0 && (processed%10 == 0 || processed == totalRows) {
-			log.Printf("Chrome: fetching content %d/%d (%s)", processed, totalRows, domain)
-		}
-
-		content := s.fetchContent(rawURL)
-
 		docs = append(docs, client.Document{
 			GlobalID: fmt.Sprintf("chrome_history:%s", rawURL),
 			Title:    title,
@@ -151,7 +121,6 @@ func (s *ChromeSource) CollectNew(srcState *state.SourceState) ([]client.Documen
 			Snippet:  title,
 			LastSeen: lastSeen,
 			URL:      rawURL,
-			Content:  content,
 		})
 	}
 
@@ -160,49 +129,6 @@ func (s *ChromeSource) CollectNew(srcState *state.SourceState) ([]client.Documen
 	}
 	log.Printf("Chrome: collected %d new URLs", len(docs))
 	return docs, nil
-}
-
-func (s *ChromeSource) fetchContent(rawURL string) string {
-	resp, err := s.httpClient.Get(rawURL)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
-	if err != nil {
-		return ""
-	}
-	text := extractText(string(body))
-	if len(text) > 5000 {
-		text = text[:5000]
-	}
-	return text
-}
-
-func extractText(htmlStr string) string {
-	doc, err := html.Parse(strings.NewReader(htmlStr))
-	if err != nil {
-		return ""
-	}
-	var sb strings.Builder
-	var walk func(*html.Node)
-	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style") {
-			return
-		}
-		if n.Type == html.TextNode {
-			t := strings.TrimSpace(n.Data)
-			if t != "" {
-				sb.WriteString(t)
-				sb.WriteString(" ")
-			}
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c)
-		}
-	}
-	walk(doc)
-	return strings.TrimSpace(sb.String())
 }
 
 func extractDomain(rawURL string) string {
